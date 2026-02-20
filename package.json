@@ -4,7 +4,8 @@
   "description": "Web app to download YouTube videos up to 1080p with audio",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "node node_modules/yt-dlp-exec/scripts/postinstall.js"
   },
   "dependencies": {
     "express": "^4.21.2",

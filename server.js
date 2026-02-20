@@ -1,14 +1,39 @@
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
-const ytDlp = require('yt-dlp-exec');
+const ytDlpExec = require('yt-dlp-exec');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const INFO_TTL_MS = 15 * 60 * 1000;
 const TARGET_HEIGHT = Number.parseInt(process.env.TARGET_HEIGHT || '1080', 10);
 const YTDLP_CONCURRENT_FRAGMENTS = Number.parseInt(process.env.YTDLP_CONCURRENT_FRAGMENTS || '8', 10);
+const YT_DLP_PATH = (process.env.YT_DLP_PATH || '').trim();
 
 const infoCache = new Map();
+
+function resolveYtDlpBinaryPath() {
+  const bundled = path.join(
+    __dirname,
+    'node_modules',
+    'yt-dlp-exec',
+    'bin',
+    process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
+  );
+
+  if (YT_DLP_PATH) {
+    return YT_DLP_PATH;
+  }
+
+  if (fs.existsSync(bundled)) {
+    return bundled;
+  }
+
+  return process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+}
+
+const ytDlpBinaryPath = resolveYtDlpBinaryPath();
+const ytDlp = ytDlpExec.create(ytDlpBinaryPath);
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -117,7 +142,15 @@ app.post('/api/info', async (req, res) => {
     const info = await getVideoInfo(url);
     return res.json(info);
   } catch (error) {
-    return res.status(400).json({ error: String(error?.message || 'Failed to fetch video info') });
+    const message = String(error?.stderr || error?.shortMessage || error?.message || 'Failed to fetch video info');
+    const missingBinary = message.includes('ENOENT') || message.includes('spawn');
+    if (missingBinary) {
+      return res.status(500).json({
+        error: 'yt-dlp binary not found on server. Set YT_DLP_PATH or ensure yt-dlp-exec postinstall runs.'
+      });
+    }
+
+    return res.status(400).json({ error: message });
   }
 });
 
@@ -200,7 +233,12 @@ app.get('/api/download-stream', async (req, res) => {
 });
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, cacheSize: infoCache.size, storage: 'stream-only' });
+  res.json({
+    ok: true,
+    cacheSize: infoCache.size,
+    storage: 'stream-only',
+    ytDlpBinaryPath
+  });
 });
 
 app.listen(PORT, () => {
