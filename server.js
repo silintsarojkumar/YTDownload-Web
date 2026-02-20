@@ -121,6 +121,7 @@ function setCachedInfo(url, data) {
 function extractFormats(formats = []) {
   const seen = new Set();
   const result = [];
+  const standardHeights = [2160, 1440, 1080, 720, 480, 360, 240, 144];
 
   for (const f of formats) {
     const height = Number(f?.height);
@@ -132,6 +133,22 @@ function extractFormats(formats = []) {
 
     const label = `${height}p`;
     if (seen.has(label)) continue;
+
+    seen.add(label);
+    result.push({ label, height, ext: 'mp4' });
+  }
+
+  // Always expose standard quality options so UI does not get stuck at one value
+  // when extractor responses are limited on some deployments.
+  for (const height of standardHeights) {
+    if (height > TARGET_HEIGHT) {
+      continue;
+    }
+
+    const label = `${height}p`;
+    if (seen.has(label)) {
+      continue;
+    }
 
     seen.add(label);
     result.push({ label, height, ext: 'mp4' });
@@ -212,6 +229,7 @@ app.get('/api/download-stream', async (req, res) => {
   let flags;
   let contentType;
   let fileName;
+  let fallbackFlags = null;
 
   if (fmt === 'audio') {
     flags = withAuthFlags({
@@ -230,7 +248,21 @@ app.get('/api/download-stream', async (req, res) => {
     const parsedHeight = Number.parseInt(fmt, 10);
     const selectedHeight = Number.isFinite(parsedHeight) && parsedHeight > 0 ? parsedHeight : TARGET_HEIGHT;
 
+    // Prefer separate video+audio for real HD (1080p+), merged by ffmpeg.
     flags = withAuthFlags({
+      format: `bestvideo[height<=${selectedHeight}][vcodec!=none]+bestaudio[acodec!=none]/best[height<=${selectedHeight}]`,
+      output: '-',
+      mergeOutputFormat: 'mp4',
+      noWarnings: true,
+      noPlaylist: true,
+      retries: 3,
+      fragmentRetries: 3,
+      extractorRetries: 1,
+      concurrentFragments: YTDLP_CONCURRENT_FRAGMENTS
+    });
+
+    // Fallback to progressive if merge-to-stdout is unsupported in environment.
+    fallbackFlags = withAuthFlags({
       format: `best[height<=${selectedHeight}][ext=mp4][acodec!=none][vcodec!=none]/best[height<=${selectedHeight}][acodec!=none][vcodec!=none]/best`,
       output: '-',
       noWarnings: true,
@@ -247,7 +279,9 @@ app.get('/api/download-stream', async (req, res) => {
   res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
 
-  const child = ytDlp.exec(url, flags, { reject: false });
+  let child = ytDlp.exec(url, flags, { reject: false });
+  let switchedToFallback = false;
+  let stderrText = '';
 
   child.stdout.on('error', () => {
     if (!res.headersSent) {
@@ -255,7 +289,9 @@ app.get('/api/download-stream', async (req, res) => {
     }
   });
 
-  child.stderr.on('data', () => {
+  child.stderr.on('data', (chunk) => {
+    const text = chunk.toString();
+    stderrText += text;
     // Keep stderr consumed to avoid process blockage.
   });
 
@@ -265,13 +301,45 @@ app.get('/api/download-stream', async (req, res) => {
     }
   });
 
-  child.on('close', (code) => {
-    if (code !== 0 && !res.writableEnded) {
-      res.end();
-    }
-  });
+  const pipeChild = (proc) => {
+    proc.stdout.pipe(res, { end: true });
 
-  child.stdout.pipe(res);
+    proc.on('close', (code) => {
+      if (code === 0 || res.writableEnded) {
+        return;
+      }
+
+      const mergeLikelyFailed =
+        !switchedToFallback &&
+        fallbackFlags &&
+        (stderrText.toLowerCase().includes('ffmpeg') ||
+          stderrText.toLowerCase().includes('muxer') ||
+          stderrText.toLowerCase().includes('unable to') ||
+          stderrText.toLowerCase().includes('conversion failed'));
+
+      if (mergeLikelyFailed) {
+        switchedToFallback = true;
+        stderrText = '';
+        child = ytDlp.exec(url, fallbackFlags, { reject: false });
+        child.stderr.on('data', (chunk) => {
+          stderrText += chunk.toString();
+        });
+        child.stdout.on('error', () => {
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to stream output.' });
+          }
+        });
+        pipeChild(child);
+        return;
+      }
+
+      if (!res.writableEnded) {
+        res.end();
+      }
+    });
+  };
+
+  pipeChild(child);
 });
 
 app.get('/health', (_req, res) => {
