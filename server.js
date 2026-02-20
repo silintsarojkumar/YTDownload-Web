@@ -9,6 +9,8 @@ const INFO_TTL_MS = 15 * 60 * 1000;
 const TARGET_HEIGHT = Number.parseInt(process.env.TARGET_HEIGHT || '1080', 10);
 const YTDLP_CONCURRENT_FRAGMENTS = Number.parseInt(process.env.YTDLP_CONCURRENT_FRAGMENTS || '8', 10);
 const YT_DLP_PATH = (process.env.YT_DLP_PATH || '').trim();
+const YT_DLP_COOKIES = (process.env.YT_DLP_COOKIES || '').trim();
+const YT_DLP_COOKIES_FROM_BROWSER = (process.env.YT_DLP_COOKIES_FROM_BROWSER || '').trim();
 
 const infoCache = new Map();
 
@@ -34,6 +36,18 @@ function resolveYtDlpBinaryPath() {
 
 const ytDlpBinaryPath = resolveYtDlpBinaryPath();
 const ytDlp = ytDlpExec.create(ytDlpBinaryPath);
+
+function withAuthFlags(baseFlags) {
+  const flags = { ...baseFlags };
+
+  if (YT_DLP_COOKIES) {
+    flags.cookies = YT_DLP_COOKIES;
+  } else if (YT_DLP_COOKIES_FROM_BROWSER) {
+    flags.cookiesFromBrowser = YT_DLP_COOKIES_FROM_BROWSER;
+  }
+
+  return flags;
+}
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -109,14 +123,13 @@ async function getVideoInfo(url) {
   const cached = getCachedInfo(url);
   if (cached) return cached;
 
-  const info = await ytDlp(url, {
+  const info = await ytDlp(url, withAuthFlags({
     dumpSingleJson: true,
     skipDownload: true,
     noWarnings: true,
-    noCallHome: true,
     noPlaylist: true,
     noCheckFormats: true
-  });
+  }));
 
   const payload = {
     title: info?.title || 'Unknown',
@@ -143,7 +156,14 @@ app.post('/api/info', async (req, res) => {
     return res.json(info);
   } catch (error) {
     const message = String(error?.stderr || error?.shortMessage || error?.message || 'Failed to fetch video info');
+    const botCheck = message.toLowerCase().includes('sign in to confirm');
     const missingBinary = message.includes('ENOENT') || message.includes('spawn');
+    if (botCheck) {
+      return res.status(403).json({
+        error: 'YouTube blocked anonymous access. Set YT_DLP_COOKIES or YT_DLP_COOKIES_FROM_BROWSER.'
+      });
+    }
+
     if (missingBinary) {
       return res.status(500).json({
         error: 'yt-dlp binary not found on server. Set YT_DLP_PATH or ensure yt-dlp-exec postinstall runs.'
@@ -170,34 +190,32 @@ app.get('/api/download-stream', async (req, res) => {
   let fileName;
 
   if (fmt === 'audio') {
-    flags = {
+    flags = withAuthFlags({
       format: 'bestaudio[ext=m4a]/bestaudio/best',
       output: '-',
       noWarnings: true,
-      noCallHome: true,
       noPlaylist: true,
       retries: 3,
       fragmentRetries: 3,
       extractorRetries: 1,
       concurrentFragments: YTDLP_CONCURRENT_FRAGMENTS
-    };
+    });
     contentType = 'audio/mp4';
     fileName = `${safeTitle}.m4a`;
   } else {
     const parsedHeight = Number.parseInt(fmt, 10);
     const selectedHeight = Number.isFinite(parsedHeight) && parsedHeight > 0 ? parsedHeight : TARGET_HEIGHT;
 
-    flags = {
+    flags = withAuthFlags({
       format: `best[height<=${selectedHeight}][ext=mp4][acodec!=none][vcodec!=none]/best[height<=${selectedHeight}][acodec!=none][vcodec!=none]/best`,
       output: '-',
       noWarnings: true,
-      noCallHome: true,
       noPlaylist: true,
       retries: 3,
       fragmentRetries: 3,
       extractorRetries: 1,
       concurrentFragments: YTDLP_CONCURRENT_FRAGMENTS
-    };
+    });
     contentType = 'video/mp4';
     fileName = `${safeTitle}-${selectedHeight}p.mp4`;
   }
