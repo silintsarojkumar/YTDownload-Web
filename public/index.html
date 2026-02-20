@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YT Download Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>YT Download Bot</h1>
+      <p class="subtitle">Paste a YouTube URL to download video or audio</p>
+    </header>
+
+    <div class="search-box">
+      <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+      <button id="fetchBtn" onclick="fetchInfo()">Fetch</button>
+    </div>
+
+    <div id="error" class="error hidden"></div>
+
+    <div id="videoInfo" class="video-info hidden">
+      <div class="video-card">
+        <img id="thumbnail" src="" alt="Thumbnail">
+        <div class="video-details">
+          <h2 id="videoTitle"></h2>
+          <p id="videoChannel"></p>
+          <p id="videoDuration"></p>
+        </div>
+      </div>
+
+      <div class="format-section">
+        <label for="formatSelect">Choose format:</label>
+        <select id="formatSelect"></select>
+        <button id="downloadBtn" onclick="startDownload()">Download</button>
+      </div>
+    </div>
+
+    <div id="progressSection" class="progress-section hidden">
+      <div class="progress-bar">
+        <div id="progressFill" class="progress-fill" style="width: 0%"></div>
+      </div>
+      <p id="progressText">Starting download...</p>
+    </div>
+
+    <div id="downloadReady" class="download-ready hidden">
+      <p>Your file is ready!</p>
+      <a id="downloadLink" href="#" class="download-link">Download File</a>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
