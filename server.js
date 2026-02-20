@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const ytDlpExec = require('yt-dlp-exec');
 
@@ -11,8 +12,10 @@ const YTDLP_CONCURRENT_FRAGMENTS = Number.parseInt(process.env.YTDLP_CONCURRENT_
 const YT_DLP_PATH = (process.env.YT_DLP_PATH || '').trim();
 const YT_DLP_COOKIES = (process.env.YT_DLP_COOKIES || '').trim();
 const YT_DLP_COOKIES_FROM_BROWSER = (process.env.YT_DLP_COOKIES_FROM_BROWSER || '').trim();
+const YT_DLP_COOKIES_BASE64 = (process.env.YT_DLP_COOKIES_BASE64 || '').trim();
 
 const infoCache = new Map();
+let runtimeCookiesPath = '';
 
 function resolveYtDlpBinaryPath() {
   const bundled = path.join(
@@ -37,14 +40,35 @@ function resolveYtDlpBinaryPath() {
 const ytDlpBinaryPath = resolveYtDlpBinaryPath();
 const ytDlp = ytDlpExec.create(ytDlpBinaryPath);
 
+function writeRuntimeCookiesFile() {
+  if (!YT_DLP_COOKIES_BASE64) {
+    return '';
+  }
+
+  try {
+    const decoded = Buffer.from(YT_DLP_COOKIES_BASE64, 'base64').toString('utf8');
+    const tmpPath = path.join(os.tmpdir(), `yt-cookies-${process.pid}.txt`);
+    fs.writeFileSync(tmpPath, decoded, 'utf8');
+    return tmpPath;
+  } catch {
+    return '';
+  }
+}
+
+runtimeCookiesPath = writeRuntimeCookiesFile();
+
 function withAuthFlags(baseFlags) {
   const flags = { ...baseFlags };
 
   if (YT_DLP_COOKIES) {
     flags.cookies = YT_DLP_COOKIES;
+  } else if (runtimeCookiesPath) {
+    flags.cookies = runtimeCookiesPath;
   } else if (YT_DLP_COOKIES_FROM_BROWSER) {
     flags.cookiesFromBrowser = YT_DLP_COOKIES_FROM_BROWSER;
   }
+
+  flags.extractorArgs = 'youtube:player_client=android,web';
 
   return flags;
 }
@@ -160,7 +184,7 @@ app.post('/api/info', async (req, res) => {
     const missingBinary = message.includes('ENOENT') || message.includes('spawn');
     if (botCheck) {
       return res.status(403).json({
-        error: 'YouTube blocked anonymous access. Set YT_DLP_COOKIES or YT_DLP_COOKIES_FROM_BROWSER.'
+        error: 'YouTube blocked anonymous access. Set YT_DLP_COOKIES, YT_DLP_COOKIES_BASE64, or YT_DLP_COOKIES_FROM_BROWSER.'
       });
     }
 
@@ -251,11 +275,20 @@ app.get('/api/download-stream', async (req, res) => {
 });
 
 app.get('/health', (_req, res) => {
+  const ytAuthMode = YT_DLP_COOKIES
+    ? 'cookies-file'
+    : runtimeCookiesPath
+      ? 'cookies-base64'
+      : YT_DLP_COOKIES_FROM_BROWSER
+        ? 'cookies-from-browser'
+        : 'none';
+
   res.json({
     ok: true,
     cacheSize: infoCache.size,
     storage: 'stream-only',
-    ytDlpBinaryPath
+    ytDlpBinaryPath,
+    ytAuthMode
   });
 });
 
