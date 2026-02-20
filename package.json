@@ -1,0 +1,13 @@
+{
+  "name": "ytweb",
+  "version": "1.0.0",
+  "description": "Web app to download YouTube videos up to 1080p with audio",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "yt-dlp-exec": "^1.0.2"
+  }
+}
